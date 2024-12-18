@@ -20,6 +20,8 @@ bool isAlarmActive = false;
 bool isMotionDetected = false;
 unsigned long motionStartTime = 0;
 const unsigned long motionTimeout = 5000; // 5 segundos para desativar o alarme
+bool isAlarmTriggered = false; // Controla se o alarme foi disparado
+
 
 void setup() {
   Serial.begin(115200);
@@ -115,8 +117,9 @@ void detectMotion() {
 
 // Função para tratar movimento detectado
 void handleMotion() {
-  if (millis() - motionStartTime > motionTimeout) {
+  if (millis() - motionStartTime > motionTimeout && !isAlarmTriggered) {
     activatePermanentBuzzer();
+    isAlarmTriggered = true; // Marca o alarme como disparado
   }
 }
 
@@ -141,14 +144,6 @@ void soundBuzzerPatternWithCheck(int times, int duration, int interval) {
     delay(1000 - duration); // Complemento até 1 segundo total
   }
 }
-
-// Função para emitir padrões de som no buzzer
-// void soundBuzzerPattern(int times, int duration, int interval) {
-//   for (int i = 0; i < times; i++) {
-//     tone(BUZZER_PIN, 1000, duration);
-//     delay(duration + interval);
-//   }
-// }
 
 // Função para emitir padrões de som no buzzer
 void soundBuzzerPattern(int times, int duration, int interval) {
