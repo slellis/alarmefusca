@@ -1,29 +1,3 @@
-/*
-  Conexões elétricas:
-  - MFRC522:
-    RST (Reset) -> GPIO 4
-    SDA (SS)    -> GPIO 5
-    MOSI        -> GPIO 23
-    MISO        -> GPIO 19
-    SCK         -> GPIO 18
-    VCC         -> 3.3V
-    GND         -> GND
-
-  - HC-SR04:
-    VCC         -> 3.3V
-    GND         -> GND
-    TRIG        -> GPIO 25
-    ECHO        -> GPIO 26
-
-  - Buzzer:
-    VCC         -> GPIO 27
-    GND         -> GND
-
-  - LED (simulando alarme):
-    Anodo (+)   -> GPIO 13
-    Catodo (-)  -> GND
-*/
-
 #include <SPI.h>
 #include <MFRC522.h>
 
@@ -42,50 +16,42 @@ MFRC522 rfid(SS_PIN, RST_PIN);
 byte authorizedUID[] = {0x36, 0xAC, 0xB3, 0xF9};
 
 // Variáveis de estado
-bool isLEDOn = false;
-bool isBuzzerOn = false;
-bool motionDetected = false;
+bool isAlarmActive = false;
+bool isMotionDetected = false;
+unsigned long motionStartTime = 0;
+const unsigned long motionTimeout = 5000; // 5 segundos para desativar o alarme
 
 void setup() {
   Serial.begin(115200);
-  SPI.begin(); 
-  rfid.PCD_Init(); 
+  SPI.begin();
+  rfid.PCD_Init();
 
   pinMode(LED_PIN, OUTPUT);
   pinMode(BUZZER_PIN, OUTPUT);
   pinMode(TRIG_PIN, OUTPUT);
   pinMode(ECHO_PIN, INPUT);
 
-  digitalWrite(LED_PIN, LOW); 
+  digitalWrite(LED_PIN, LOW);
   digitalWrite(BUZZER_PIN, LOW);
 
   Serial.println("Sistema inicializado. Passe a tag RFID para ligar/desligar o alarme.");
 }
 
 void loop() {
-
-  Serial.print("  isLEDOn: ");
-  Serial.print(isLEDOn);
-  Serial.print("   isBuzzerOn: ");
-  Serial.println(isBuzzerOn);
-
-  // Verifica se uma nova tag foi apresentada
+  // Verifica leitura de tag
   if (rfid.PICC_IsNewCardPresent() && rfid.PICC_ReadCardSerial()) {
     if (checkAuthorizedUID()) {
-      toggleLED();
-      if (!isLEDOn) {
-        deactivateBuzzer(); // Desliga o buzzer ao desativar o alarme
-      } else {
-        waitForActivation(); // Espera antes de ativar o alarme
-      }
-      delay(1000); // Pequeno delay para evitar leituras repetidas
+      toggleAlarm();
     }
-    rfid.PICC_HaltA(); // Finaliza a comunicação com a tag
+    rfid.PICC_HaltA();
   }
 
-  // Se o LED estiver aceso, verifica aproximação
-  if (isLEDOn) {
-    detectMotionAndTriggerAlarm();
+  // Verifica movimento
+  if (isAlarmActive) {
+    detectMotion();
+    if (isMotionDetected) {
+      handleMotion();
+    }
   }
 }
 
@@ -94,7 +60,6 @@ bool checkAuthorizedUID() {
   if (rfid.uid.size != sizeof(authorizedUID)) {
     return false;
   }
-
   for (byte i = 0; i < rfid.uid.size; i++) {
     if (rfid.uid.uidByte[i] != authorizedUID[i]) {
       return false;
@@ -103,31 +68,25 @@ bool checkAuthorizedUID() {
   return true;
 }
 
-// Função para alternar o estado do LED
-void toggleLED() {
-  isLEDOn = !isLEDOn;
-  digitalWrite(LED_PIN, isLEDOn ? HIGH : LOW);
-  Serial.print("Alarme ");
-  Serial.println(isLEDOn ? "ativado." : "desativado.");
+// Função para alternar o estado do alarme
+void toggleAlarm() {
+  isAlarmActive = !isAlarmActive;
+  digitalWrite(LED_PIN, isAlarmActive ? HIGH : LOW);
 
-  if (!isLEDOn) {
-    Serial.println("Alarme desativado. Bip curto.");
-    tone(BUZZER_PIN, 1000, 200); // Emite um bip curto
+  if (isAlarmActive) {
+    Serial.println("Alarme ativado.");
+    soundBuzzerPattern(1, 200, 0);       // 1 bip curto
+    soundBuzzerPattern(5, 200, 200);    // 5 bips curtos
+    soundBuzzerPattern(1, 1000, 0);     // 1 bip longo
+  } else {
+    Serial.println("Alarme desativado.");
+    soundBuzzerPattern(1, 200, 0);      // 1 bip curto
   }
+  isMotionDetected = false;
 }
 
-// Função para esperar antes de ativar o alarme
-void waitForActivation() {
-  for (int i = 0; i < 15; i++) {
-    tone(BUZZER_PIN, 1000, 200);
-    delay(1000);
-  }
-  tone(BUZZER_PIN, 1000, 2000); // Bip longo para indicar ativação
-  Serial.println("Alarme ativado e pronto para monitorar movimentos.");
-}
-
-// Função para detectar movimento com o HC-SR04 e acionar o buzzer
-void detectMotionAndTriggerAlarm() {
+// Função para detectar movimento com o HC-SR04
+void detectMotion() {
   long duration;
   int distance;
 
@@ -144,57 +103,59 @@ void detectMotionAndTriggerAlarm() {
   // Calcula a distância em centímetros
   distance = duration * 0.034 / 2;
 
-  // Imprime a distância no monitor serial
-  if (duration > 0) {
-    Serial.print("Distância: ");
-    Serial.print(distance);
-    Serial.println(" cm");
-    Serial.print("motionDetected: ");
-    Serial.print(motionDetected);
-  }
-
-  // Verifica se um objeto está dentro do limite e se o movimento já foi detectado
-  if (distance >= 10 && distance <= 50 && !motionDetected) {
-
-    Serial.print("motionDetected: ");
-    Serial.println(motionDetected);
-    
-    motionDetected = true;
-
-    Serial.print("Distância: ");
-    Serial.print(distance);
-    Serial.println(" cm");
-    Serial.print("motionDetected: ");
-    Serial.println(motionDetected);
-
-    Serial.println("Movimento detectado!");
-
-    // Emite 10 bips antes de ativar o buzzer permanentemente
-    for (int i = 0; i < 10; i++) {
-     tone(BUZZER_PIN, 1000, 200);
-     delay(1000);
+  if (distance >= 10 && distance <= 50) {
+    if (!isMotionDetected) {
+      isMotionDetected = true;
+      motionStartTime = millis();
+      Serial.println("Movimento detectado! Aguardando desativação.");
+      soundBuzzerPatternWithCheck(5, 200, 200); // 5 bips curtos com verificação de tag
     }
-    activateBuzzer();
   }
 }
 
-
-// Função para ativar o buzzer
-void activateBuzzer() {
-  if (!isBuzzerOn) { // Verifica se o buzzer já não está ativado
-    isBuzzerOn = true;
-    //digitalWrite(BUZZER_PIN, HIGH);
-    tone(BUZZER_PIN, 1000); // Gere um tom contínuo de 1000 Hz
-    Serial.println("Buzzer ativado permanentemente.");
+// Função para tratar movimento detectado
+void handleMotion() {
+  if (millis() - motionStartTime > motionTimeout) {
+    activatePermanentBuzzer();
   }
 }
 
-
-// Função para desativar o buzzer
-void deactivateBuzzer() {
-  isBuzzerOn = false;
-  motionDetected = false;
-  //digitalWrite(BUZZER_PIN, LOW);
-  noTone(BUZZER_PIN); // Pare o tom contínuo
-  Serial.println("Buzzer desativado.");
+// Função para ativar o buzzer permanentemente
+void activatePermanentBuzzer() {
+  Serial.println("Alarme disparado! Buzzer ativado permanentemente.");
+  tone(BUZZER_PIN, 1000); // Bip permanente
 }
+
+// Função para emitir padrões de som no buzzer com verificação de tag
+void soundBuzzerPatternWithCheck(int times, int duration, int interval) {
+  for (int i = 0; i < times; i++) {
+    // Verifica se uma tag válida foi lida durante o padrão de som
+    if (rfid.PICC_IsNewCardPresent() && rfid.PICC_ReadCardSerial() && checkAuthorizedUID()) {
+      toggleAlarm();
+      rfid.PICC_HaltA();
+      return; // Sai da função se o alarme for desativado
+    }
+    tone(BUZZER_PIN, 1000, duration);
+    //delay(duration + interval);
+    delay(duration);       // Duração do bip
+    delay(1000 - duration); // Complemento até 1 segundo total
+  }
+}
+
+// Função para emitir padrões de som no buzzer
+// void soundBuzzerPattern(int times, int duration, int interval) {
+//   for (int i = 0; i < times; i++) {
+//     tone(BUZZER_PIN, 1000, duration);
+//     delay(duration + interval);
+//   }
+// }
+
+// Função para emitir padrões de som no buzzer
+void soundBuzzerPattern(int times, int duration, int interval) {
+  for (int i = 0; i < times; i++) {
+    tone(BUZZER_PIN, 1000, duration);
+    delay(duration);       // Duração do bip
+    delay(1000 - duration); // Complemento até 1 segundo total
+  }
+}
+
