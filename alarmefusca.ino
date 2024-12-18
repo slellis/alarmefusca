@@ -44,6 +44,7 @@ byte authorizedUID[] = {0x36, 0xAC, 0xB3, 0xF9};
 // Variáveis de estado
 bool isLEDOn = false;
 bool isBuzzerOn = false;
+bool motionDetected = false;
 
 void setup() {
   Serial.begin(115200);
@@ -62,12 +63,20 @@ void setup() {
 }
 
 void loop() {
+
+  Serial.print("  isLEDOn: ");
+  Serial.print(isLEDOn);
+  Serial.print("   isBuzzerOn: ");
+  Serial.println(isBuzzerOn);
+
   // Verifica se uma nova tag foi apresentada
   if (rfid.PICC_IsNewCardPresent() && rfid.PICC_ReadCardSerial()) {
     if (checkAuthorizedUID()) {
       toggleLED();
       if (!isLEDOn) {
         deactivateBuzzer(); // Desliga o buzzer ao desativar o alarme
+      } else {
+        waitForActivation(); // Espera antes de ativar o alarme
       }
       delay(1000); // Pequeno delay para evitar leituras repetidas
     }
@@ -75,8 +84,8 @@ void loop() {
   }
 
   // Se o LED estiver aceso, verifica aproximação
-  if (isLEDOn && !isBuzzerOn && detectMotion()) {
-    activateBuzzer();
+  if (isLEDOn) {
+    detectMotionAndTriggerAlarm();
   }
 }
 
@@ -100,10 +109,25 @@ void toggleLED() {
   digitalWrite(LED_PIN, isLEDOn ? HIGH : LOW);
   Serial.print("Alarme ");
   Serial.println(isLEDOn ? "ativado." : "desativado.");
+
+  if (!isLEDOn) {
+    Serial.println("Alarme desativado. Bip curto.");
+    tone(BUZZER_PIN, 1000, 200); // Emite um bip curto
+  }
 }
 
-// Função para detectar movimento com o HC-SR04
-bool detectMotion() {
+// Função para esperar antes de ativar o alarme
+void waitForActivation() {
+  for (int i = 0; i < 15; i++) {
+    tone(BUZZER_PIN, 1000, 200);
+    delay(1000);
+  }
+  tone(BUZZER_PIN, 1000, 2000); // Bip longo para indicar ativação
+  Serial.println("Alarme ativado e pronto para monitorar movimentos.");
+}
+
+// Função para detectar movimento com o HC-SR04 e acionar o buzzer
+void detectMotionAndTriggerAlarm() {
   long duration;
   int distance;
 
@@ -115,30 +139,62 @@ bool detectMotion() {
   digitalWrite(TRIG_PIN, LOW);
 
   // Lê o tempo do pulso no pino ECHO
-  duration = pulseIn(ECHO_PIN, HIGH);
+  duration = pulseIn(ECHO_PIN, HIGH, 30000); // Timeout de 30 ms
 
   // Calcula a distância em centímetros
   distance = duration * 0.034 / 2;
 
   // Imprime a distância no monitor serial
-  Serial.print("Distância: ");
-  Serial.print(distance);
-  Serial.println(" cm");
+  if (duration > 0) {
+    Serial.print("Distância: ");
+    Serial.print(distance);
+    Serial.println(" cm");
+    Serial.print("motionDetected: ");
+    Serial.print(motionDetected);
+  }
 
-  // Retorna true se algo estiver a menos de 90 cm
-  return (distance > 0 && distance < 90);
+  // Verifica se um objeto está dentro do limite e se o movimento já foi detectado
+  if (distance >= 10 && distance <= 50 && !motionDetected) {
+
+    Serial.print("motionDetected: ");
+    Serial.println(motionDetected);
+    
+    motionDetected = true;
+
+    Serial.print("Distância: ");
+    Serial.print(distance);
+    Serial.println(" cm");
+    Serial.print("motionDetected: ");
+    Serial.println(motionDetected);
+
+    Serial.println("Movimento detectado!");
+
+    // Emite 10 bips antes de ativar o buzzer permanentemente
+    for (int i = 0; i < 10; i++) {
+     tone(BUZZER_PIN, 1000, 200);
+     delay(1000);
+    }
+    activateBuzzer();
+  }
 }
+
 
 // Função para ativar o buzzer
 void activateBuzzer() {
-  isBuzzerOn = true;
-  digitalWrite(BUZZER_PIN, HIGH);
-  Serial.println("Movimento detectado! Buzzer ativado.");
+  if (!isBuzzerOn) { // Verifica se o buzzer já não está ativado
+    isBuzzerOn = true;
+    //digitalWrite(BUZZER_PIN, HIGH);
+    tone(BUZZER_PIN, 1000); // Gere um tom contínuo de 1000 Hz
+    Serial.println("Buzzer ativado permanentemente.");
+  }
 }
+
 
 // Função para desativar o buzzer
 void deactivateBuzzer() {
   isBuzzerOn = false;
-  digitalWrite(BUZZER_PIN, LOW);
+  motionDetected = false;
+  //digitalWrite(BUZZER_PIN, LOW);
+  noTone(BUZZER_PIN); // Pare o tom contínuo
   Serial.println("Buzzer desativado.");
 }
