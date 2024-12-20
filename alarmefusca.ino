@@ -99,35 +99,62 @@ void toggleAlarm() {
   isAlarmTriggered = false; // Reseta o estado de alarme disparado
 }
 
-// Função para detectar movimento com o HC-SR04
+// Função para detectar movimento com filtragem de ruídos
 void detectMotion() {
-  long duration;
-  int distance;
+  const int numSamples = 5;      // Número de amostras para o filtro
+  const int minDistance = 10;    // Distância mínima em cm para detectar movimento
+  const int maxDistance = 50;    // Distância máxima em cm para detectar movimento
 
-  // Envia um pulso de 10 microsegundos pelo pino TRIG
-  digitalWrite(TRIG_PIN, LOW);
-  delayMicroseconds(2);
-  digitalWrite(TRIG_PIN, HIGH);
-  delayMicroseconds(10);
-  digitalWrite(TRIG_PIN, LOW);
+  long durations[numSamples];
+  int validSamples = 0;
 
-  // Lê o tempo do pulso no pino ECHO
-  duration = pulseIn(ECHO_PIN, HIGH, 30000); // Timeout de 30 ms
+  // Coleta múltiplas amostras
+  for (int i = 0; i < numSamples; i++) {
+    digitalWrite(TRIG_PIN, LOW);
+    delayMicroseconds(2);
+    digitalWrite(TRIG_PIN, HIGH);
+    delayMicroseconds(10);
+    digitalWrite(TRIG_PIN, LOW);
 
-  // Calcula a distância em centímetros
-  distance = duration * 0.034 / 2;
+    // Lê o tempo do pulso no pino ECHO
+    long duration = pulseIn(ECHO_PIN, HIGH, 30000); // Timeout de 30 ms
 
-  if (distance >= 10 && distance <= 50) {
+    if (duration > 0) {
+      durations[validSamples++] = duration;
+    }
+    delay(50); // Pequeno atraso entre amostras
+  }
+
+  if (validSamples == 0) {
+    return; // Nenhuma leitura válida
+  }
+
+  // Ordena as amostras para calcular a mediana
+  for (int i = 0; i < validSamples - 1; i++) {
+    for (int j = i + 1; j < validSamples; j++) {
+      if (durations[i] > durations[j]) {
+        long temp = durations[i];
+        durations[i] = durations[j];
+        durations[j] = temp;
+      }
+    }
+  }
+
+  // Calcula a mediana
+  long medianDuration = durations[validSamples / 2];
+  int distance = medianDuration * 0.034 / 2;
+
+  if (distance >= minDistance && distance <= maxDistance) {
     if (!isMotionDetected) {
       isMotionDetected = true;
       motionStartTime = millis();
       ledInterval = 100; // Piscar frenético do LED
       Serial.println("Movimento detectado! Aguardando desativação.");
-      //soundBuzzerPatternWithCheck(5, 200, 200); // 5 bips curtos com verificação de tag
       soundBuzzer(5, 500, 500); 
     }
   }
 }
+
 
 // Função para tratar movimento detectado
 void handleMotion() {
