@@ -1,219 +1,130 @@
-#include <SPI.h>
-#include <MFRC522.h>
+#include <EEPROM.h>
 
-// Definições dos pinos
-#define RST_PIN 4
-#define SS_PIN 5
-#define LED_PIN 13
-#define BUZZER_PIN 27
-#define TRIG_PIN 25
-#define ECHO_PIN 26
+#define LED_ALARME A1
+#define LED_BOBINA A0
+#define LED_STATUS 13
+#define BUZZER 8
+#define RELE_BOBINA 6
+#define BOTAO_A 2  // INT0
+#define BOTAO_B 3  // INT1
+#define BOTAO_MANUAL 4
+#define SENSOR_PORTA 5
 
-// Configuração do módulo RC522
-MFRC522 rfid(SS_PIN, RST_PIN);
+#define EEPROM_ALARME_ADDR 0
+#define EEPROM_BOBINA_ADDR 1
 
-// UID autorizado
-byte authorizedUID[] = {0x36, 0xAC, 0xB3, 0xF9};
+volatile bool alarmeAtivado = false;
+volatile bool bobinaLiberada = false;
 
-// Variáveis de estado
-bool isAlarmActive = false;     // Controla se o alarme está ativo
-bool isMotionDetected = false;  // Controla se foi detectado movimento
-bool isAlarmTriggered = false;  // Controla se o alarme foi disparado
+void salvarEstado() {
+    EEPROM.update(EEPROM_ALARME_ADDR, alarmeAtivado);
+    EEPROM.update(EEPROM_BOBINA_ADDR, bobinaLiberada);
+    Serial.println("Estado salvo na EEPROM.");
+    Serial.print("alarmeAtivado: ");
+    Serial.println(alarmeAtivado);
+    Serial.print("bobinaLiberada: ");
+    Serial.println(bobinaLiberada);
+}
 
-unsigned long motionStartTime = 0;
-const unsigned long motionTimeout = 5000; // 5 segundos para desativar o alarme
-unsigned long ledLastToggleTime = 0;
-unsigned long ledInterval = 0; // Intervalo padrão do LED
-bool ledState = false;
+void restaurarEstado() {
+    alarmeAtivado = EEPROM.read(EEPROM_ALARME_ADDR);
+    bobinaLiberada = EEPROM.read(EEPROM_BOBINA_ADDR);
+    Serial.print("Estado restaurado: Alarme ");
+    Serial.print(alarmeAtivado ? "ATIVADO" : "DESATIVADO");
+    Serial.print(", Bobina ");
+    Serial.println(bobinaLiberada ? "LIBERADA" : "BLOQUEADA");
+}
+
+void ativarAlarme() {
+    // Debounce
+    static unsigned long lastActivation = 0;
+    if (millis() - lastActivation < 200) return; // Debounce de 200ms
+    lastActivation = millis();
+
+    alarmeAtivado = true;
+    bobinaLiberada = false;
+    digitalWrite(LED_ALARME, HIGH);
+    digitalWrite(RELE_BOBINA, HIGH);
+    digitalWrite(LED_BOBINA, HIGH);
+    tone(BUZZER, 1000, 100); // BIP curto
+    Serial.println("ALARME ATIVADO: LED piscando a cada 3s, buzzer emitindo 1 bip, motor bloqueado.");
+    salvarEstado();
+}
+
+void desativarAlarme() {
+    // Debounce
+    static unsigned long lastDeactivation = 0;
+    if (millis() - lastDeactivation < 200) return; // Debounce de 200ms
+    lastDeactivation = millis();
+
+    alarmeAtivado = false;
+    digitalWrite(LED_ALARME, LOW);
+    noTone(BUZZER);
+    Serial.println("ALARME DESATIVADO: LED piscando a cada 1s, buzzer emitindo 2 bips.");
+    salvarEstado();
+}
+
+
+
+void liberarBobina() {
+    if (!alarmeAtivado) {
+        bobinaLiberada = true;
+        digitalWrite(RELE_BOBINA, LOW);
+        digitalWrite(LED_BOBINA, LOW);
+        Serial.println("BOBINA LIBERADA: Motor desbloqueado, LED apagado.");
+        salvarEstado();
+    }
+}
 
 void setup() {
-  Serial.begin(115200);
-  SPI.begin();
-  rfid.PCD_Init();
-
-  pinMode(LED_PIN, OUTPUT);
-  pinMode(BUZZER_PIN, OUTPUT);
-  pinMode(TRIG_PIN, OUTPUT);
-  pinMode(ECHO_PIN, INPUT);
-
-  digitalWrite(LED_PIN, LOW);
-  digitalWrite(BUZZER_PIN, LOW);
-
-  Serial.println("Sistema inicializado. Passe a tag RFID para ligar/desligar o alarme.");
+    Serial.begin(9600);
+    pinMode(LED_ALARME, OUTPUT);
+    pinMode(LED_BOBINA, OUTPUT);
+    pinMode(LED_STATUS, OUTPUT);
+    pinMode(BUZZER, OUTPUT);
+    pinMode(RELE_BOBINA, OUTPUT);
+    pinMode(BOTAO_A, INPUT);
+    pinMode(BOTAO_B, INPUT);
+    pinMode(BOTAO_MANUAL, INPUT_PULLUP);
+    pinMode(SENSOR_PORTA, INPUT_PULLUP);
+    
+    restaurarEstado();
+    
+    digitalWrite(LED_ALARME, alarmeAtivado ? HIGH : LOW);
+    digitalWrite(RELE_BOBINA, bobinaLiberada ? LOW : HIGH);
+    digitalWrite(LED_BOBINA, bobinaLiberada ? LOW : HIGH);
+    
+    attachInterrupt(digitalPinToInterrupt(BOTAO_A), ativarAlarme, RISING);
+    attachInterrupt(digitalPinToInterrupt(BOTAO_B), desativarAlarme, RISING);
 }
 
 void loop() {
-  // Verifica leitura de tag
-  if (rfid.PICC_IsNewCardPresent() && rfid.PICC_ReadCardSerial()) {
-    if (checkAuthorizedUID()) {
-      // Foi passada a tag para ativar ou desativar o alarme
-      toggleAlarm();
+    static unsigned long prevMillisLED = 0;
+    static bool ledStatus = false;
+    unsigned long currentMillis = millis();
+    
+    // LED de Status piscando a cada 1s
+    if (currentMillis - prevMillisLED >= 1000) {
+        prevMillisLED = currentMillis;
+        ledStatus = !ledStatus;
+        digitalWrite(LED_STATUS, ledStatus);
+    //    Serial.println("LED de Status: piscando a cada 1 segundo.");
     }
-    rfid.PICC_HaltA();
-  }
-
-  // Verifica movimento
-  if (isAlarmActive) {
-    detectMotion();
-    if (isMotionDetected) {
-      handleMotion();
+    
+    // Verificação do botão manual
+    if (digitalRead(BOTAO_MANUAL) == LOW) {
+        liberarBobina();
+        delay(500);  // Debounce
     }
-  }
-
-  // Gerencia o comportamento do LED
-  manageLed();
-}
-
-// Função para verificar se a tag lida é autorizada
-bool checkAuthorizedUID() {
-  if (rfid.uid.size != sizeof(authorizedUID)) {
-    return false;
-  }
-  for (byte i = 0; i < rfid.uid.size; i++) {
-    if (rfid.uid.uidByte[i] != authorizedUID[i]) {
-      return false;
+    
+    // Detecção da abertura da porta
+    if (digitalRead(SENSOR_PORTA) == LOW && alarmeAtivado) {
+        Serial.println("!!! ALERTA !!! PORTA ABERTA - SIRENE ATIVADA!");
+        tone(BUZZER, 1500);
+        while (digitalRead(BOTAO_B) != HIGH) {
+            delay(100);
+        }
+        noTone(BUZZER);
+        Serial.println("Alarme Resetado.");
     }
-  }
-  return true;
-}
-
-// A tag foi passada no sensor para ativar ou desativar o alarme
-void toggleAlarm() {
-  isAlarmActive = !isAlarmActive; // Alterna true/false
-  //ledInterval = isAlarmActive ? 3000 : 0; // Define o intervalo do LED para alarme ativo ou desligado
-  digitalWrite(LED_PIN, LOW); // LED apagado inicialmente
-
-  if (isAlarmActive) {
-    Serial.println("Alarme ativado.");
-    ledInterval = 3000;                 // LED piscando na frequencia de 3 segundos
-    //soundBuzzerPattern(1, 200, 0);       // 1 bip curto
-    soundBuzzerPattern(5, 200, 200);    // 5 bips curtos
-    soundBuzzerPattern(1, 1000, 0);     // 1 bip longo
-  } else {
-    Serial.println("Alarme desativado.");
-    ledInterval = 0;                    // LED para de piscar com alarme desativado
-    soundBuzzer(3, 100, 50);       // 3 bips curtos
-    digitalWrite(LED_PIN, LOW);         // Garante que o LED fique apagado
-  }
-  isMotionDetected = false;
-  isAlarmTriggered = false; // Reseta o estado de alarme disparado
-}
-
-// Função para detectar movimento com filtragem de ruídos
-void detectMotion() {
-  const int numSamples = 5;      // Número de amostras para o filtro
-  const int minDistance = 10;    // Distância mínima em cm para detectar movimento
-  const int maxDistance = 50;    // Distância máxima em cm para detectar movimento
-
-  long durations[numSamples];
-  int validSamples = 0;
-
-  // Coleta múltiplas amostras
-  for (int i = 0; i < numSamples; i++) {
-    digitalWrite(TRIG_PIN, LOW);
-    delayMicroseconds(2);
-    digitalWrite(TRIG_PIN, HIGH);
-    delayMicroseconds(10);
-    digitalWrite(TRIG_PIN, LOW);
-
-    // Lê o tempo do pulso no pino ECHO
-    long duration = pulseIn(ECHO_PIN, HIGH, 30000); // Timeout de 30 ms
-
-    if (duration > 0) {
-      durations[validSamples++] = duration;
-    }
-    delay(50); // Pequeno atraso entre amostras
-  }
-
-  if (validSamples == 0) {
-    return; // Nenhuma leitura válida
-  }
-
-  // Ordena as amostras para calcular a mediana
-  for (int i = 0; i < validSamples - 1; i++) {
-    for (int j = i + 1; j < validSamples; j++) {
-      if (durations[i] > durations[j]) {
-        long temp = durations[i];
-        durations[i] = durations[j];
-        durations[j] = temp;
-      }
-    }
-  }
-
-  // Calcula a mediana
-  long medianDuration = durations[validSamples / 2];
-  int distance = medianDuration * 0.034 / 2;
-
-  if (distance >= minDistance && distance <= maxDistance) {
-    if (!isMotionDetected) {
-      isMotionDetected = true;
-      motionStartTime = millis();
-      ledInterval = 100; // Piscar frenético do LED
-      Serial.println("Movimento detectado! Aguardando desativação.");
-      soundBuzzer(5, 500, 500); 
-    }
-  }
-}
-
-
-// Função para tratar movimento detectado
-void handleMotion() {
-  if (millis() - motionStartTime > motionTimeout && !isAlarmTriggered) {
-    activatePermanentBuzzer();
-    digitalWrite(LED_PIN, HIGH); // LED aceso permanentemente
-    ledInterval = 0; // Para o piscar do LED
-    isAlarmTriggered = true; // Marca o alarme como disparado
-  }
-}
-
-// Função para ativar o buzzer permanentemente
-void activatePermanentBuzzer() {
-  Serial.println("Alarme disparado! Buzzer ativado permanentemente.");
-  tone(BUZZER_PIN, 1000); // Bip permanente
-}
-
-// Função para emitir padrões de som no buzzer com verificação de tag
-void soundBuzzerPatternWithCheck(int times, int duration, int interval) {
-  for (int i = 0; i < times; i++) {
-    // Verifica se uma tag válida foi lida durante o padrão de som
-    if (rfid.PICC_IsNewCardPresent() && rfid.PICC_ReadCardSerial() && checkAuthorizedUID()) {
-      toggleAlarm();
-      rfid.PICC_HaltA();
-      return; // Sai da função se o alarme for desativado
-    }
-    tone(BUZZER_PIN, 1000, duration);
-    delay(duration);       // Duração do bip
-    delay(1000 - duration); // Complemento até 1 segundo total
-  }
-}
-
-// Função para emitir padrões de som no buzzer
-void soundBuzzerPattern(int times, int duration, int interval) {
-  for (int i = 0; i < times; i++) {
-    tone(BUZZER_PIN, 1000, duration);
-    digitalWrite(LED_PIN, HIGH);
-    delay(duration);       // Duração do bip
-    digitalWrite(LED_PIN, LOW);
-    delay(1000 - duration); // Complemento até 1 segundo total
-  }
-}
-
-// Função para emitir som no buzzer sem padrão de frequencia
-void soundBuzzer(int times, int duration, int interval) {
-  for (int i = 0; i < times; i++) {
-    tone(BUZZER_PIN, 3000, duration);
-    digitalWrite(LED_PIN, HIGH);
-    delay(duration);       // Duração do bip
-    digitalWrite(LED_PIN, LOW);
-    delay(interval); 
-  }
-}
-
-// Função para gerenciar o comportamento do LED
-void manageLed() {
-  if (ledInterval > 0 && millis() - ledLastToggleTime >= ledInterval) {
-    ledState = !ledState;
-    digitalWrite(LED_PIN, ledState);
-    ledLastToggleTime = millis();
-  }
 }
