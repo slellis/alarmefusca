@@ -1,0 +1,13 @@
+site_name: Projeto Alarme Fusca
+site_description: Documentação do sistema de alarme automotivo para Fusca
+site_author: Sidney Lellis
+
+theme:
+  name: mkdocs
+
+nav:
+  - Início: index.md
+  - Tutorial MkDocs: Tutorial_MkDocs_Instalacao_e_Uso.md
+  - Documentação Completa: Documentacao_Completa_Alarme_Fusca.md
+  - Placa Central Lógica: Placa_Central_Logica_Alarme_Fusca.md
+  - Placa de Potência: Placa_Potencia_Alarme_Fusca.md
