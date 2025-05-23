@@ -9,13 +9,16 @@ Este repositório contém a documentação do projeto de alarme automotivo para 
 Se o GitHub Pages estiver habilitado, você poderá acessar em:
 
 ```
-https://slellis.github.io/alarmefusca/
+https://SEUUSUARIO.github.io/alarmefusca/
+```
+
+(Substitua `SEUUSUARIO` pelo seu nome de usuário do GitHub.)
 
 ---
 
 ## 📦 Estrutura do Projeto
 
-```
+```plaintext
 alarme-fusca-docs/
 ├── docs/
 │   ├── index.md
